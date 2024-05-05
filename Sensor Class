@@ -1,0 +1,53 @@
+#define SENSORSAMPLINGPERIOD 0.00032
+AnalogIn rightSensor(PC_5);
+AnalogIn leftSensor(PB_1);
+
+class Sensor {
+private:
+    double previousSensorError;
+    double leftSensorReading, rightSensorReading;
+    double sensorError;
+
+    Ticker sensorsTicker;
+
+public: 
+    Sensor() {
+        previousSensorError = 0;
+        sensorsTicker.attach(callback(this, &Sensor::updateSensorReadings), SENSORSAMPLINGPERIOD);
+    }
+
+    void detachSensorsTicker(){
+        sensorsTicker.detach();
+        leftSensorReading = 0;
+        rightSensorReading = 0;
+    }
+
+    void attachSensorsTicker(){
+        sensorsTicker.attach(callback(this, &Sensor::updateSensorReadings), SENSORSAMPLINGPERIOD);
+    }
+
+    double getRightSensor(){
+        return rightSensorReading;
+    }
+
+    double getLeftSensor(){
+        return leftSensorReading;
+    }
+
+    void updateSensorReadings(){
+        leftSensorReading = leftSensor.read();
+        rightSensorReading = rightSensor.read();
+    }
+
+    double getSensorError(){
+        return (leftSensorReading - rightSensorReading);
+    }
+
+    double getPreviousSensorError(){
+        return previousSensorError;
+    }
+
+    void updatePreviousSensorError(){
+        previousSensorError = getSensorError();
+    }
+};
