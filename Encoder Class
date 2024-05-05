@@ -1,0 +1,85 @@
+#include "QEI.h"
+
+#define ENCODER_PIN_CHANNEL_A1 PC_2
+#define ENCODER_PIN_CHANNEL_B1 PC_3
+#define ENCODER_PIN_CHANNEL_A2 PB_14
+#define ENCODER_PIN_CHANNEL_B2 PB_13
+
+#define CPR 1024
+#define PI 3.14159265
+#define SAMPLINGPERIOD 0.00032
+
+QEI rightEncoder(ENCODER_PIN_CHANNEL_A1, ENCODER_PIN_CHANNEL_B1, NC, CPR, QEI::X4_ENCODING);
+QEI leftEncoder(ENCODER_PIN_CHANNEL_A2, ENCODER_PIN_CHANNEL_B2 ,NC, CPR, QEI::X4_ENCODING);
+
+class Encoder {
+private: 
+    int currentPulseCountRight, lastPulseCountRight, currentPulseCountLeft, lastPulseCountLeft;
+    Ticker rightWheelTicker, leftWheelTicker;
+
+    int gearRatio;
+    double wheelRadius;
+
+    double filteredRWS, filteredLWS;    //Right/Left Wheel Speed
+    double previousFilteredRWS, previousFilteredLWS;
+    double originalRWS, previousOriginalRWS, originalLWS, previousOriginalLWS;
+
+public: 
+    Encoder(){
+        lastPulseCountRight = 0;
+        lastPulseCountLeft = 0;
+
+        wheelRadius = 0.04104;
+
+        previousFilteredRWS = 0;
+        previousFilteredLWS = 0;
+        previousOriginalRWS = 0;
+        previousOriginalLWS = 0;
+
+        rightWheelTicker.attach(callback(this, &Encoder::updateCurrentRightWheelSpeed), SAMPLINGPERIOD);
+        leftWheelTicker.attach(callback(this, &Encoder::updateCurrentLeftWheelSpeed), SAMPLINGPERIOD);
+    }
+
+    void resetEncoderValues(){
+        lastPulseCountRight = 0;
+        lastPulseCountLeft = 0;
+        previousFilteredRWS = 0;
+        previousFilteredLWS = 0;
+        previousOriginalRWS = 0;
+        previousOriginalLWS = 0;
+    }
+
+    double filterSpeed(double originalSpeed, double previousOriginalSpeed, double previousFilteredSpeed){
+        return 0.969*previousFilteredSpeed + 0.0155*originalSpeed + 0.0155*previousOriginalSpeed;
+    }
+
+    void updateCurrentRightWheelSpeed(){
+        currentPulseCountRight = rightEncoder.getPulses();
+        originalRWS = (double(currentPulseCountRight - lastPulseCountRight)/CPR) / SAMPLINGPERIOD * 2 * PI * wheelRadius;
+        filteredRWS = filterSpeed(originalRWS, previousOriginalRWS, previousFilteredRWS);
+        lastPulseCountRight = currentPulseCountRight;
+        previousOriginalRWS = originalRWS;
+        previousFilteredRWS = filteredRWS;
+    }
+
+    void updateCurrentLeftWheelSpeed(){
+        currentPulseCountLeft = leftEncoder.getPulses();
+        originalLWS = (double(currentPulseCountLeft - lastPulseCountLeft)/CPR) / SAMPLINGPERIOD * 2 * PI * wheelRadius;
+        filteredLWS = filterSpeed(originalLWS, previousOriginalLWS, previousFilteredLWS);
+        lastPulseCountLeft = currentPulseCountLeft;
+        previousOriginalLWS = originalLWS;
+        previousFilteredLWS = filteredLWS;
+    }
+
+    double getRightWheelSpeed(){
+        return filteredRWS;
+    }
+
+    double getLeftWheelSpeed(){
+        return filteredLWS;
+    }
+
+    double getAverageWheelSpeed(){
+        return (filteredRWS + filteredLWS) / 2;
+    }
+};
