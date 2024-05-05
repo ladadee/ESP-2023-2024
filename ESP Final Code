@@ -1,0 +1,140 @@
+#include "mbed.h"
+#include "C12832.h"  
+#include "SetSpeed.h"
+
+C12832 lcd(D11, D13, D12, D7, D10);
+
+SetSpeed IAmSpeed;
+Timeout stopTimer, startTimer;
+
+Serial hm10(PA_11, PA_12);
+Serial pc(USBTX, USBRX);
+char s;
+char w;
+
+double PWMfrequency = 30000;
+
+void displaywheelControl(){
+    lcd.locate(0, 0);
+    lcd.printf("Desired Left Speed: %.2f m/s  ", IAmSpeed.getDesiredLeftWheelSpeed());
+    lcd.locate(0,10);
+    lcd.printf("Desired Right Speed: %.2f m/s  ", IAmSpeed.getDesiredRightWheelSpeed());
+}
+
+void displaySpeed(){
+    lcd.locate(0, 0);
+    lcd.printf("Left  Speed: %.2f m/s  ", IAmSpeed.getLeftWheelSpeed());    
+    lcd.locate(0,10);
+    lcd.printf("Right Speed: %.2f m/s  ", IAmSpeed.getRightWheelSpeed());
+}
+
+void displaySensor(){
+    lcd.locate(0, 0);
+    lcd.printf("Left  Sensor: %.2f  ", IAmSpeed.getLeftSensor());
+    lcd.locate(0,20);
+    lcd.printf("Right Sensor: %.2f  ", IAmSpeed.getRightSensor());
+}
+
+void displayAll(){
+    lcd.locate(0, 0);
+    lcd.printf("Left:  %.2f  %.2f m/s  ", IAmSpeed.getLeftSensor(), IAmSpeed.getLeftWheelSpeed());
+    lcd.locate(0,20);
+    lcd.printf("Right: %.2f  %.2f m/s  ", IAmSpeed.getRightSensor(), IAmSpeed.getRightWheelSpeed());
+}
+
+void displayMaxIntegralSum(){
+    lcd.locate(0, 0);
+    lcd.printf("Max Integral: %.2f", IAmSpeed.getMaxIntegralSum());
+}
+
+double maxSpeedReached = 0;
+void displayMaxSpeed(){
+    if(IAmSpeed.getAverageWheelSpeed() > maxSpeedReached){
+        maxSpeedReached = IAmSpeed.getAverageWheelSpeed();
+    }
+    lcd.locate(0, 0);
+    lcd.printf("Max Speed Reached: %.2f", maxSpeedReached);
+}
+
+void displayConstants(){
+    lcd.locate(0, 0);
+    lcd.printf("Proportional: %.2f\nIntegral: %.2f\nDerivative: %.6f", IAmSpeed.getProportional(), IAmSpeed.getIntegral(), IAmSpeed.getDerivative());
+}
+
+void displayConstantAndSpeed(){
+    lcd.locate(0, 0);
+    lcd.printf("Proportional: %.2f\nIntegral: %.2f\nLeft Speed: %.6f\nRight Speed: %.2f", IAmSpeed.getProportional(), IAmSpeed.getIntegral(), IAmSpeed.getLeftWheelSpeed(), IAmSpeed.getRightWheelSpeed());
+}
+
+
+int main() {
+    int startCounter = 0, stopCounter = 0;
+    BipolarR = 1;
+    BipolarL = 1;
+    DirectionR = 0;
+    DirectionL = 0;
+    Enable = 0;
+    PWML.period(1/PWMfrequency);
+    PWMR.period(1/PWMfrequency);
+    PWMR.write(0.5f);
+    PWML.write(0.5f);
+
+    pc.baud(9600);
+    hm10.baud(9600);
+
+
+    //Main Buggy Running Algorithm
+    while (!hm10.writeable()) {} 
+    while(1) {
+        displayConstants();
+        // displayAll();
+        // displayConstantAndSpeed();
+        if (hm10.readable()) {
+            s = hm10.getc();
+            if(s == 't'){
+                IAmSpeed.turn();
+            }
+            if(s == '0'){
+                startTimer.detach();
+                IAmSpeed.turnOff();
+            }
+            if(s == '1'){
+                IAmSpeed.turnOn();
+                maxSpeedReached = 0;
+            }
+            if(s == 'p'){
+                IAmSpeed.increaseProportional();
+            }
+            if(s == 'i'){
+                IAmSpeed.increaseIntegral();
+            }
+            if(s == 'd'){
+                IAmSpeed.increaseDerivative();
+            }
+        }
+
+        if (abs(IAmSpeed.getLeftSensor() - IAmSpeed.getRightSensor()) < 0.02){
+            if (stopCounter == 0){
+                stopCounter = 1;
+                startCounter = 0;
+                stopTimer.attach(callback(&IAmSpeed, &SetSpeed::stop), 100);
+            }
+        }
+        else {
+            stopTimer.detach();
+            stopCounter = 0;
+        }
+
+        if (abs(IAmSpeed.getLeftSensor() - IAmSpeed.getRightSensor()) >= 0.02){
+            if (startCounter == 0){
+                startCounter = 1;
+                stopCounter = 0;
+                startTimer.attach(callback(&IAmSpeed, &SetSpeed::start), 2);
+            }
+        }
+        else {
+            startTimer.detach();
+            startCounter = 0;
+        }
+    }
+}
