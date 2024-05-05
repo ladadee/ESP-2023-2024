@@ -1,0 +1,283 @@
+#include "Sensor.h"
+#include "Encoder.h"
+
+#define DESIREDAVERAGESPEED 1.3
+#define INTEGRALSUMLIMIT 0.2
+
+#define CONSTANTSCALERINCREMENTPERIOD 0.03
+
+PwmOut PWMR(PC_8), PWML(PC_9);
+DigitalOut BipolarR(PC_6), BipolarL(PB_2), DirectionR(PB_12), DirectionL(PB_15), Enable(PC_4);
+
+class SetSpeed : public Sensor, public Encoder {
+private:
+    double integralSum;
+    double desiredSpeedProportionalConstant, desiredSpeedIntegralConstant, desiredSpeedDerivativeConstant;
+    double desiredRight, desiredLeft;
+    double correctionalTerm;
+    double maxIntegralSum;
+    double constantScaler;
+
+    double rightError, leftError;
+    double newRightDutyCycle, newLeftDutyCycle;
+    double wheelProportionalConstant, wheelIntegralConstant, wheelDerivativeConstant;
+    double leftIntegralSum, rightIntegralSum;
+    double leftPreviousError, rightPreviousError;
+
+    double rightCounterSpeed;
+    double leftCounterSpeed;
+    double rightCounterPWM;
+    double leftCounterPWM;
+
+    Ticker newDesiredSpeedTicker;
+
+    Ticker setWheelSpeedTicker, resetWheelSpeedSetterValuesTicker; 
+
+    Ticker constantScalerIncrementTicker, changeSpeedTicker;
+
+public:
+    SetSpeed(){
+        newDesiredSpeedTicker.attach(callback(this, &SetSpeed::updateDesiredSpeed), SENSORSAMPLINGPERIOD);
+        setWheelSpeedTicker.attach(callback(this, &SetSpeed::setWheelSpeed), SAMPLINGPERIOD);
+        resetWheelSpeedSetterValuesTicker.attach(callback(this, &SetSpeed::resetWheelSpeedSetterValues), SENSORSAMPLINGPERIOD);
+
+        //get consistent output from just the proportional itself
+        //adjust derivative so that there is minimal oscillation (* derivative don't affect integral)
+        //adjust integral so that it can get over the curve
+        desiredSpeedProportionalConstant = 1.4;//  1.8
+        desiredSpeedIntegralConstant = 0;
+        desiredSpeedDerivativeConstant = 0;   //max possible: 0.00056 <- decrease from here to tune
+        
+        wheelProportionalConstant = 1.2;  //Required for full range of 0.5 duty cycle
+        wheelIntegralConstant = 0;    //less than 920
+        wheelDerivativeConstant = 0;    //Pointless so removed
+        
+        maxIntegralSum = 0;
+
+        leftPreviousError = 0;
+        rightPreviousError = 0;
+        leftIntegralSum = 0;
+        rightIntegralSum = 0;
+    }
+
+    void resetDesiredSpeedCalculationValues(){
+        integralSum = 0;
+        desiredRight = DESIREDAVERAGESPEED;
+        desiredLeft = DESIREDAVERAGESPEED;
+        constantScaler = 0.5;
+    }
+
+    void increaseProportional(){
+        desiredSpeedProportionalConstant += 0.01;
+        // wheelProportionalConstant += 0.01;
+    }
+
+    double getProportional(){
+        return desiredSpeedProportionalConstant;
+        // return wheelProportionalConstant;
+    }
+
+    void increaseIntegral(){
+        desiredSpeedIntegralConstant += 0.1;
+        // wheelIntegralConstant += 10;
+    }
+
+    double getIntegral(){
+        return desiredSpeedIntegralConstant;
+        // return wheelIntegralConstant;
+
+    }
+
+    void increaseDerivative(){
+        desiredSpeedDerivativeConstant += 0.000001;
+        // wheelDerivativeConstant += 0.000001;
+    }
+
+    double getDerivative(){
+        return desiredSpeedDerivativeConstant;
+        // return wheelDerivativeConstant;
+    }
+
+    double getDesiredRightWheelSpeed(){
+        return desiredRight;
+    }
+
+    double getDesiredLeftWheelSpeed(){
+        return desiredLeft;
+    }
+
+    void updateDesiredSpeed(){
+        correctionalTerm = 0;
+        double SensorError = Sensor::getLeftSensor() - Sensor::getRightSensor();
+
+        desiredLeft = DESIREDAVERAGESPEED;
+        desiredRight = DESIREDAVERAGESPEED;
+
+        integralSum += (Sensor::getSensorError() * SENSORSAMPLINGPERIOD);
+        if(integralSum > INTEGRALSUMLIMIT){
+            integralSum = INTEGRALSUMLIMIT;
+        }
+        else if(integralSum < (-1*INTEGRALSUMLIMIT)){
+            integralSum = (-1*INTEGRALSUMLIMIT);
+        }
+
+        if(abs(integralSum) > maxIntegralSum){
+            maxIntegralSum = integralSum;
+        }
+
+        correctionalTerm += (desiredSpeedProportionalConstant * SensorError);   //adds proportional term
+        correctionalTerm += (constantScaler * desiredSpeedIntegralConstant * integralSum); //adds integral term
+        correctionalTerm += (desiredSpeedDerivativeConstant * (SensorError - Sensor::getPreviousSensorError())/SENSORSAMPLINGPERIOD);   //adds derivative term
+
+        Sensor::updatePreviousSensorError();
+
+        if(correctionalTerm > 0){
+            desiredLeft -= (correctionalTerm);
+        }
+        else if(correctionalTerm < 0){
+            desiredRight += (correctionalTerm);
+        }
+    }
+
+    void turn(){
+        newDesiredSpeedTicker.detach();
+        desiredRight = 0;
+        desiredLeft = 0;
+        wait_ms(500);
+        desiredRight = 0.5;
+        desiredLeft = -0.5;
+        wait_ms(600);
+        while (Sensor::getLeftSensor() < 0.3){
+            desiredRight = 0.5;
+            desiredLeft = -0.5;
+        }
+        while (Sensor::getLeftSensor() > 0.2){
+            desiredRight = 0.1;
+            desiredLeft = -0.1;
+        }
+        desiredRight = -0.1;
+        desiredLeft = 0.1;
+        wait_ms(10);
+        desiredRight = 0.3;
+        desiredLeft = 0.3;
+        wait_ms(100);
+        resetDesiredSpeedCalculationValues();
+        newDesiredSpeedTicker.attach(callback(this, &SetSpeed::updateDesiredSpeed), SENSORSAMPLINGPERIOD);
+    }
+
+    double getMaxIntegralSum(){
+        return maxIntegralSum;
+    }
+
+    void setNewSpeed(double newLeft, double newRight){
+        desiredRight = newRight;
+        desiredLeft = newLeft;
+        leftIntegralSum = 0;
+        rightIntegralSum = 0;
+    }
+
+    void setWheelSpeed(){
+        rightError = desiredRight - Encoder::getRightWheelSpeed();
+        leftError = desiredLeft - Encoder::getLeftWheelSpeed();
+        newRightDutyCycle = 0.5;
+        newLeftDutyCycle = 0.5;
+
+        if(rightError < 0 && rightIntegralSum > 0){
+            rightIntegralSum = 0;
+        }
+        if(leftError < 0 && leftIntegralSum > 0){
+            leftIntegralSum = 0;
+        }
+
+        rightIntegralSum += (rightError * SAMPLINGPERIOD);
+        leftIntegralSum += (leftError * SAMPLINGPERIOD);
+
+
+        newRightDutyCycle += (wheelProportionalConstant * rightError);   //adds proportional term
+        newRightDutyCycle += (wheelIntegralConstant * rightIntegralSum); //adds integral term
+        newRightDutyCycle += (wheelDerivativeConstant * (rightError - rightPreviousError)/SAMPLINGPERIOD);   //adds derivative term
+
+        newLeftDutyCycle += (wheelProportionalConstant * leftError);     //adds proportional term
+        newLeftDutyCycle += (wheelIntegralConstant * leftIntegralSum); //adds integral term
+        newLeftDutyCycle += (wheelDerivativeConstant * (leftError - leftPreviousError)/SAMPLINGPERIOD);   //adds derivative term
+
+        rightPreviousError = rightError;
+        leftPreviousError = leftError;
+
+        if(newLeftDutyCycle > 1){
+            PWML.write(1.0f);
+        }
+        else if(newLeftDutyCycle < 0){
+            PWML.write(0.0f);
+        }
+        else{
+            PWML.write(newLeftDutyCycle);
+        }
+
+        if(newRightDutyCycle > 1){
+            PWMR.write(1.0f);
+        }
+        else if(newRightDutyCycle < 0){
+            PWMR.write(0.0f);
+        }
+        else{
+            PWMR.write(newRightDutyCycle);
+        }
+    }
+
+    void detachAlternateSpeed(){
+        changeSpeedTicker.detach();
+        Enable = 0;
+        resetDesiredSpeedCalculationValues();
+        Encoder::resetEncoderValues();
+    }
+
+    void stop(){
+        newDesiredSpeedTicker.detach();
+        setWheelSpeedTicker.detach();
+        // changeSpeedTicker.attach(callback(this, &SetSpeed::alternateSpeed), 0.15);
+        for(int i=0;i<3;i++){
+            PWMR.write(0.5f);
+            PWML.write(0.5f);
+            wait_ms(150);
+            PWMR.write(0.3f);
+            PWML.write(0.3f);
+            wait_ms(150);
+        }
+        PWMR.write(0.5f);
+        PWML.write(0.5f);
+        resetDesiredSpeedCalculationValues();
+        Encoder::resetEncoderValues();
+        Enable = 0;
+    }
+
+    void start(){
+        resetWheelSpeedSetterValues();
+        resetDesiredSpeedCalculationValues();
+        // Encoder::resetEncoderValues();
+        Enable = 1;
+        setWheelSpeedTicker.attach(callback(this, &SetSpeed::setWheelSpeed), SAMPLINGPERIOD);
+        PWMR.write(0.7f);
+        PWML.write(0.7f);
+        wait_ms(100);
+        newDesiredSpeedTicker.attach(callback(this, &SetSpeed::updateDesiredSpeed), SENSORSAMPLINGPERIOD);
+    }
+
+    void turnOff(){
+        stop();
+        Enable = 0;
+        Sensor::detachSensorsTicker();
+    }
+
+    void turnOn(){
+        Enable = 1;
+        Sensor::attachSensorsTicker();
+    }
+
+    void resetWheelSpeedSetterValues(){
+        leftPreviousError = 0;
+        rightPreviousError = 0;
+        leftIntegralSum = 0;
+        rightIntegralSum = 0;
+    }
+};
